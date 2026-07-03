@@ -8,7 +8,7 @@ edmdata is primarily used for aggregating statistics about Early Day Motions int
 
 If you would like to create statistics for your own purposes, edmdata can be imported as a library, by adding this to your `Cargo.toml`:
 ```
-edmdata = { "git" = "https://github.com/k8ey/edmdata.git" }
+edmdata = { git = "https://github.com/k8ey/edmdata.git" }
 ```
 
 Before doing anything else, you need to import the database.<br>
