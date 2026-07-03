@@ -1,7 +1,13 @@
+use std::error::Error;
+
 use bson::DateTime;
 use chrono::{Datelike, Months, Timelike};
 use derive_more::From;
 use itertools::Itertools;
+use resvg::{
+    tiny_skia::Pixmap,
+    usvg::{Options, Transform, Tree},
+};
 use svg::{
     Document, Node,
     node::element::{Group, Path, Rectangle, Text, path::Data},
@@ -32,6 +38,37 @@ pub const FONT_SIZE_SMALL: usize = 12;
 pub const FONT_SIZE_MEDIUM: usize = 22;
 
 pub const FONT_SIZE_LARGE: usize = 30;
+
+pub fn save_node(
+    node: impl Into<Box<dyn Node>>,
+    path: impl AsRef<std::path::Path> + Clone,
+) -> Result<(), Box<dyn Error>> {
+    let (width, height) = (
+        WIDTH_HEIGHT_BASE * WIDTH_HEIGHT_RATIO.0,
+        WIDTH_HEIGHT_BASE * WIDTH_HEIGHT_RATIO.1,
+    );
+
+    svg::save(
+        path.clone(),
+        &Document::new()
+            .set("width", width)
+            .set("height", height)
+            .add(node),
+    )
+    .unwrap();
+
+    let svg = std::fs::read_to_string(path.clone())?;
+    let mut options = Options::default();
+    options.dpi = 96.0 * 96.0;
+    options.fontdb_mut().load_system_fonts();
+    let tree = Tree::from_str(svg.as_str(), &options).unwrap();
+    let mut pixmap = Pixmap::new(tree.size().width() as u32, tree.size().height() as u32).unwrap();
+    resvg::render(&tree, Transform::identity(), &mut pixmap.as_mut());
+
+    pixmap.save_png(path.as_ref().with_extension("png"))?;
+
+    Ok(())
+}
 
 #[derive(Clone, Debug, Default, From, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StackedGraphLabels {
@@ -716,9 +753,9 @@ impl From<&Vec<(EarlyDayMotion, Vec<Signature>)>> for SupportingSignaturesOverTi
                 .iter()
                 .map(|colour| colour.to_string())
                 .collect(),
-
             start_date.clone().unwrap(),
-            start_date.map(|dt| dt.to_chrono().format("%d/%m/%Y").to_string())
+            start_date
+                .map(|dt| dt.to_chrono().format("%d/%m/%Y").to_string())
                 .unwrap_or(String::new()),
             end_date,
             "Early Day Motions (as supporting signatures) over date tabled (as time in days)",

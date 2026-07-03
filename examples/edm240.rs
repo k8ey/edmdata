@@ -3,13 +3,10 @@ use std::{error::Error, path::Path};
 use edmdata::{
     data::{Dataset, edm::MotionKind},
     query::*,
-    svg::{
-        StackedSignaturesPerPartyOverTimeGraph, SupportingSignaturesOverTimeGraph,
-        WIDTH_HEIGHT_BASE, WIDTH_HEIGHT_RATIO,
-    },
+    svg::{StackedSignaturesPerPartyOverTimeGraph, SupportingSignaturesOverTimeGraph, save_node},
 };
 use futures_util::TryStreamExt;
-use svg::{Document, Node};
+use svg::Document;
 
 #[tokio::main]
 async fn main() {
@@ -17,17 +14,41 @@ async fn main() {
     let dataset = Dataset::new().await;
     dataset.run_refresh_tasks().await.unwrap();
 
+    std::fs::create_dir_all("data/edm240/data").unwrap();
+    std::fs::create_dir_all("data/edm240/graphs").unwrap();
+
     edm240_stats(&dataset).await.unwrap();
+
+    for i in 1..=2 {
+        early_day_motions_stats(
+            &dataset,
+            i * 5,
+            format!("fatal-prayer-motions-last-{}-years", i * 5),
+        )
+        .await
+        .unwrap();
+    }
+
+    fatal_prayer_motions_stats(&dataset, 40, "fatal-prayer-motions-all")
+        .await
+        .unwrap();
+
+    for i in 1..=3 {
+        fatal_prayer_motions_stats(
+            &dataset,
+            i * 10,
+            format!("fatal-prayer-motions-last-{}-years", i * 10),
+        )
+        .await
+        .unwrap();
+    }
 }
 
 pub async fn edm240_stats(dataset: &Dataset) -> Result<(), Box<dyn Error>> {
-    std::fs::create_dir_all("data/edm240/data")?;
-    std::fs::create_dir_all("data/edm240/graphs")?;
-
     let items = dataset
         .edms
         .aggregate(
-            MainQuery::new(
+            StatsQuery::new(
                 vec![bson::doc! {
                     "$match": {
                         "item._id": 65938,
@@ -42,77 +63,144 @@ pub async fn edm240_stats(dataset: &Dataset) -> Result<(), Box<dyn Error>> {
         .try_collect::<Vec<_>>()
         .await?;
 
-    MainQuery::write_json(&items, "data/edm240/data/edm240.json")?;
+    println!(
+        "Total supporting signatures: <b>{}</b><br>",
+        items[0].signatures.len()
+    );
+    println!();
+
+    println!("Supporting signatures by bench:");
+    println!("<ul>");
+    for bench in [("backbench", "Backbench"), ("frontbench", "Frontbench")] {
+        let total = items[0]
+            .result
+            .as_document()
+            .unwrap()
+            .get_document("supporting")
+            .unwrap()
+            .get_document(bench.0)
+            .unwrap()
+            .get_i32("total")
+            .unwrap();
+
+        println!("<li>");
+        println!(
+            "    {}: <b>{}</b> (<u>{:.1}%</u> of signatures)",
+            bench.1,
+            total,
+            total as f64 / items[0].signatures.len() as f64 * 100.0
+        );
+        println!("</li>");
+    }
+    println!("</ul>");
+    println!();
+
+    println!("Supporting signatures by party:");
+    println!("<ul>");
+    for party in items[0]
+        .result
+        .as_document()
+        .unwrap()
+        .get_document("supporting")
+        .unwrap()
+        .get_document("by_party")
+        .unwrap()
+        .into_iter()
+    {
+        let total = party.1.as_i32().unwrap();
+
+        println!("<li>");
+        println!(
+            "    {}: <b>{}</b> (<u>{:.1}%</u> of signatures)",
+            party.0,
+            total,
+            total as f64 / items[0].signatures.len() as f64 * 100.0
+        );
+        println!("</li>");
+    }
+    println!("</ul>");
+    println!();
+
+    StatsQuery::save_json(&items, "data/edm240/data/edm240.json")?;
 
     let mut graph =
         StackedSignaturesPerPartyOverTimeGraph::from(items.first().unwrap().signatures.clone());
     graph.title = "EDM 240: ".to_owned() + &graph.title;
 
-    MainGraph::write_svg(
+    save_node(
         Document::from(graph),
         "data/edm240/graphs/edm240-stacked-per-party.svg",
     )?;
 
-    for i in 1..=3 {
-        let filters = Vec::<bson::Document>::new()
-            .doc_add(FilterByMotionKind::new(vec![
-                MotionKind::Fatal,
-                MotionKind::SeemsFatal,
-            ]))
-            .doc_add(FilterByDate::new_by_year(2026 - 10 * i, 2027))
-            .doc_add(CollectSignatures::new());
+    Ok(())
+}
 
-        let items = dataset
-            .edms
-            .aggregate(MainQuery::new(filters).build())
-            .await?
-            .with_type::<QueryItem>()
-            .try_collect::<Vec<_>>()
-            .await?;
-
-        MainQuery::write_json(
-            &items,
-            format!(
-                "data/edm240/data/fatal-prayer-motions-last-{}-years.json",
-                10 * i
-            ),
-        )?;
-
-        let mut graph = SupportingSignaturesOverTimeGraph::from(
-            items
-                .iter()
-                .map(|item| (item.item.item.clone(), item.signatures.clone()))
-                .collect::<Vec<_>>(),
-        );
-        graph.title =
-            "Fatal Prayer Motions (as supporting signatures) over date tabled (as time in days)"
-                .to_owned();
-
-        MainGraph::write_svg(
-            Document::from(graph),
-            format!(
-                "data/edm240/graphs/fatal-prayer-motions-last-{}-years.svg",
-                10 * i
-            ),
-        )?;
-    }
-
+pub async fn early_day_motions_stats(
+    dataset: &Dataset,
+    years: i32,
+    path: impl AsRef<Path>,
+) -> Result<(), Box<dyn Error>> {
     let filters = Vec::<bson::Document>::new()
-        .doc_add(FilterByMotionKind::new(vec![
-            MotionKind::Fatal,
-            MotionKind::SeemsFatal,
-        ]))
+        .doc_add(FilterByDate::new_by_year(2026 - years, 2027))
         .doc_add(CollectSignatures::new());
 
     let items = dataset
         .edms
-        .aggregate(MainQuery::new(filters).build())
+        .aggregate(StatsQuery::new(filters).build())
         .await?
         .with_type::<QueryItem>()
         .try_collect::<Vec<_>>()
         .await?;
 
-    MainQuery::write_json(&items, "data/edm240/data/fatal-prayer-motions-all.json")?;
+    StatsQuery::save_json(
+        &items,
+        Path::new("data/edm240/data/data.json")
+            .with_file_name(path.as_ref())
+            .with_extension("json"),
+    )?;
+
+    save_node(
+        Document::from(SupportingSignaturesOverTimeGraph::from(
+            items
+                .iter()
+                .map(|item| (item.item.item.clone(), item.signatures.clone()))
+                .collect::<Vec<_>>(),
+        )),
+        Path::new("data/edm240/graphs/graph.svg")
+            .with_file_name(path.as_ref())
+            .with_extension("svg"),
+    )?;
+
+    Ok(())
+}
+
+pub async fn fatal_prayer_motions_stats(
+    dataset: &Dataset,
+    years: i32,
+    path: impl AsRef<Path>,
+) -> Result<(), Box<dyn Error>> {
+    let filters = Vec::<bson::Document>::new()
+        .doc_add(FilterByMotionKind::new(vec![
+            MotionKind::Fatal,
+            MotionKind::SeemsFatal,
+        ]))
+        .doc_add(FilterByDate::new_by_year(2026 - years, 2027))
+        .doc_add(CollectSignatures::new());
+
+    let items = dataset
+        .edms
+        .aggregate(StatsQuery::new(filters).build())
+        .await?
+        .with_type::<QueryItem>()
+        .try_collect::<Vec<_>>()
+        .await?;
+
+    StatsQuery::save_json(
+        &items,
+        Path::new("data/edm240/data/data.json")
+            .with_file_name(path.as_ref())
+            .with_extension("json"),
+    )?;
 
     let mut graph = SupportingSignaturesOverTimeGraph::from(
         items
@@ -120,51 +208,26 @@ pub async fn edm240_stats(dataset: &Dataset) -> Result<(), Box<dyn Error>> {
             .map(|item| (item.item.item.clone(), item.signatures.clone()))
             .collect::<Vec<_>>(),
     );
-    graph.title = "Fatal Prayer Motions (as supporting signatures) over date tabled (as time in days)".to_owned();
+    graph.title =
+        "Fatal Prayer Motions (as supporting signatures) over date tabled (as time in days)"
+            .to_owned();
 
-    MainGraph::write_svg(
+    save_node(
         Document::from(graph),
-        format!("data/edm240/graphs/fatal-prayer-motions-all.svg"),
+        Path::new("data/edm240/graphs/graph.svg")
+            .with_file_name(path.as_ref())
+            .with_extension("svg"),
     )?;
-
-    for i in 1..=2 {
-        let filters = Vec::<bson::Document>::new()
-            .doc_add(FilterByDate::new_by_year(2026 - 5 * i, 2027))
-            .doc_add(CollectSignatures::new());
-
-        let items = dataset
-            .edms
-            .aggregate(MainQuery::new(filters).build())
-            .await?
-            .with_type::<QueryItem>()
-            .try_collect::<Vec<_>>()
-            .await?;
-
-        MainQuery::write_json(
-            &items,
-            format!("data/edm240/data/edms-last-{}-years.json", 5 * i),
-        )?;
-
-        MainGraph::write_svg(
-            Document::from(SupportingSignaturesOverTimeGraph::from(
-                items
-                    .iter()
-                    .map(|item| (item.item.item.clone(), item.signatures.clone()))
-                    .collect::<Vec<_>>(),
-            )),
-            format!("data/edm240/graphs/edms-last-{}-years.svg", 5 * i),
-        )?;
-    }
 
     Ok(())
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct MainQuery {
+pub struct StatsQuery {
     pub filters: Vec<bson::Document>,
 }
 
-impl Query for MainQuery {
+impl Query for StatsQuery {
     fn build(&self) -> Vec<bson::Document> {
         let mut pipeline = self.filters.clone();
 
@@ -180,7 +243,7 @@ impl Query for MainQuery {
     }
 }
 
-impl MainQuery {
+impl StatsQuery {
     pub const fn new(filters: Vec<bson::Document>) -> Self {
         Self { filters }
     }
@@ -237,10 +300,7 @@ impl MainQuery {
             .build()
     }
 
-    pub fn write_json(
-        items: &Vec<QueryItem>,
-        path: impl AsRef<Path>,
-    ) -> Result<(), std::io::Error> {
+    pub fn save_json(items: &Vec<QueryItem>, path: impl AsRef<Path>) -> Result<(), std::io::Error> {
         std::fs::write(
             path,
             format!(
@@ -274,46 +334,5 @@ impl MainQuery {
             )
             .as_bytes(),
         )
-    }
-}
-
-#[derive(Clone, Debug, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct MainGraph;
-
-impl MainGraph {
-    pub fn write_svg(
-        node: impl Into<Box<dyn Node>>,
-        path: impl AsRef<Path> + Clone,
-    ) -> Result<(), Box<dyn Error>> {
-        let (width, height) = (
-            WIDTH_HEIGHT_BASE * WIDTH_HEIGHT_RATIO.0,
-            WIDTH_HEIGHT_BASE * WIDTH_HEIGHT_RATIO.1,
-        );
-        svg::save(
-            path.clone(),
-            &Document::new()
-                .set("width", width)
-                .set("height", height)
-                .add(node),
-        )
-        .unwrap();
-
-        let svg = std::fs::read_to_string(path.clone())?;
-        let mut options = resvg::usvg::Options::default();
-        options.dpi = 96.0 * 96.0;
-        options.fontdb_mut().load_system_fonts();
-        let tree = resvg::usvg::Tree::from_str(svg.as_str(), &options).unwrap();
-        let mut pixmap =
-            resvg::tiny_skia::Pixmap::new(tree.size().width() as u32, tree.size().height() as u32)
-                .unwrap();
-        resvg::render(
-            &tree,
-            resvg::tiny_skia::Transform::identity(),
-            &mut pixmap.as_mut(),
-        );
-
-        pixmap.save_png(path.as_ref().with_extension("png"))?;
-
-        Ok(())
     }
 }
