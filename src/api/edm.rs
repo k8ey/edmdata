@@ -1,3 +1,4 @@
+use bson::DateTime;
 use chrono::NaiveDateTime;
 use derive_more::{Display, Error, From};
 use mongodb::bson::doc;
@@ -381,7 +382,7 @@ impl Dataset {
 
     pub async fn fetch_early_day_motions(
         &self,
-        cached: &Vec<EarlyDayMotion>,
+        stored_edms: &Vec<EarlyDayMotion>,
     ) -> Result<Vec<PublishedEarlyDayMotionDetails>, PublishedEarlyDayMotionDataError> {
         let mut edms: Vec<PublishedEarlyDayMotionDetails> = Vec::new();
 
@@ -409,8 +410,16 @@ impl Dataset {
         };
 
         for id in 1..=max_id {
-            if cached.iter().find(|edm| edm._id == id as u32).is_some()
-                || edms.iter().find(|e| id == e.motion.id).is_some()
+            if stored_edms
+                .iter()
+                .filter(|edm| {
+                    DateTime::now()
+                        .saturating_duration_since(edm._updated)
+                        .as_secs()
+                        < 60 * 60 * 24
+                })
+                .any(|edm| edm._id == id as u32)
+                || edms.iter().any(|e| id == e.motion.id)
             {
                 tracing::info!("Skipped Cached EDM ({}).", id);
                 continue;

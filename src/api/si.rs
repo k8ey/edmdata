@@ -1,4 +1,5 @@
-use chrono::{DateTime, NaiveDateTime, Utc};
+use bson::DateTime;
+use chrono::{NaiveDateTime, Utc};
 use derive_more::{Display, Error, From};
 use mongodb::bson::doc;
 use reqwest::Client;
@@ -253,7 +254,7 @@ pub struct PublishedEnablingAct {
 #[serde(rename_all = "camelCase")]
 pub struct PublishedTimeline {
     pub id: String,
-    pub date_time: DateTime<Utc>,
+    pub date_time: chrono::DateTime<Utc>,
     pub name: String,
 }
 
@@ -287,8 +288,7 @@ impl Dataset {
                 .statutory_instrument
                 .id
                 .chars()
-                .find(|c| !c.is_alphanumeric())
-                .is_some()
+                .any(|c| !c.is_alphanumeric())
         {
             return Err(PublishedStatutoryInstrumentDataError::InvalidID(
                 si.statutory_instrument.statutory_instrument.id.clone(),
@@ -308,8 +308,7 @@ impl Dataset {
                 .procedure
                 .id
                 .chars()
-                .find(|c| !c.is_alphanumeric())
-                .is_some()
+                .any(|c| !c.is_alphanumeric())
         {
             return Err(PublishedStatutoryInstrumentDataError::InvalidProcedureID(
                 si.statutory_instrument.statutory_instrument.id.clone(),
@@ -322,9 +321,7 @@ impl Dataset {
         }
 
         if let Some(followed) = &si.followed_by_instrument {
-            if followed.id.len() != 8
-                || followed.id.chars().find(|c| !c.is_alphanumeric()).is_some()
-            {
+            if followed.id.len() != 8 || followed.id.chars().any(|c| !c.is_alphanumeric()) {
                 return Err(
                     PublishedStatutoryInstrumentDataError::InvalidFollowedStatutoryInstrumentID(
                         si.statutory_instrument.statutory_instrument.id.clone(),
@@ -335,9 +332,7 @@ impl Dataset {
         }
 
         if let Some(preceded) = &si.preceded_by_instrument {
-            if preceded.id.len() != 8
-                || preceded.id.chars().find(|c| !c.is_alphanumeric()).is_some()
-            {
+            if preceded.id.len() != 8 || preceded.id.chars().any(|c| !c.is_alphanumeric()) {
                 return Err(
                     PublishedStatutoryInstrumentDataError::InvalidPrecededStatutoryInstrumentID(
                         si.statutory_instrument.statutory_instrument.id.clone(),
@@ -347,14 +342,7 @@ impl Dataset {
             }
         }
 
-        if si.laying_body.id.len() != 8
-            || si
-                .laying_body
-                .id
-                .chars()
-                .find(|c| !c.is_alphanumeric())
-                .is_some()
-        {
+        if si.laying_body.id.len() != 8 || si.laying_body.id.chars().any(|c| !c.is_alphanumeric()) {
             return Err(PublishedStatutoryInstrumentDataError::InvalidLayingBodyID(
                 si.statutory_instrument.statutory_instrument.id.clone(),
                 si.laying_body.id.clone(),
@@ -373,7 +361,7 @@ impl Dataset {
         }
 
         for act in si.enabling_acts.iter() {
-            if act.id.len() != 8 || act.id.chars().find(|c| !c.is_alphanumeric()).is_some() {
+            if act.id.len() != 8 || act.id.chars().any(|c| !c.is_alphanumeric()) {
                 return Err(
                     PublishedStatutoryInstrumentDataError::InvalidActOfParliamentID(
                         si.statutory_instrument.statutory_instrument.id.clone(),
@@ -391,7 +379,7 @@ impl Dataset {
             .await?;
 
             for bi in bis.iter() {
-                if bi.id.len() != 8 || bi.id.chars().find(|c| !c.is_alphanumeric()).is_some() {
+                if bi.id.len() != 8 || bi.id.chars().any(|c| !c.is_alphanumeric()) {
                     return Err(
                         PublishedStatutoryInstrumentDataError::InvalidBusinessItemID(
                             si.statutory_instrument.statutory_instrument.id.clone(),
@@ -432,7 +420,7 @@ impl Dataset {
 
     pub async fn fetch_statutory_instruments(
         &self,
-        cached: &Vec<StatutoryInstrument>,
+        stored_sis: &Vec<StatutoryInstrument>,
     ) -> Result<Vec<PublishedStatutoryInstrument>, PublishedStatutoryInstrumentDataError> {
         let mut sis = Vec::<PublishedStatutoryInstrument>::new();
 
@@ -455,26 +443,44 @@ impl Dataset {
                 break;
             }
 
+            if response.iter().all(|si| {
+                stored_sis
+                    .iter()
+                    .filter(|si| {
+                        DateTime::now()
+                            .saturating_duration_since(si._updated)
+                            .as_secs()
+                            < 60 * 60 * 24
+                    })
+                    .any(|s| &s._id == &si.statutory_instrument.id)
+                    || sis.iter().any(|s| {
+                        si.statutory_instrument.id == s.statutory_instrument.statutory_instrument.id
+                    })
+            }) {
+                break;
+            }
+
             for si in response {
                 if bson::DateTime::now()
                     .saturating_duration_since(si.commons_laying_date.and_utc().into())
                     .as_secs()
-                    > 60 * 60 * 24 * 365
+                    > 60 * 60 * 24 * 120
                 {
                     return Ok(sis);
                 }
 
-                if cached
+                if stored_sis
                     .iter()
-                    .find(|s| &s._id == &si.statutory_instrument.id)
-                    .is_some()
-                    || sis
-                        .iter()
-                        .find(|s| {
-                            si.statutory_instrument.id
-                                == s.statutory_instrument.statutory_instrument.id
-                        })
-                        .is_some()
+                    .filter(|si| {
+                        DateTime::now()
+                            .saturating_duration_since(si._updated)
+                            .as_secs()
+                            < 60 * 60 * 24
+                    })
+                    .any(|s| &s._id == &si.statutory_instrument.id)
+                    || sis.iter().any(|s| {
+                        si.statutory_instrument.id == s.statutory_instrument.statutory_instrument.id
+                    })
                 {
                     tracing::info!(
                         "Skipped Cached SI ({}).",

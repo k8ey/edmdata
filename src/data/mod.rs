@@ -1,9 +1,3 @@
-use std::{
-    ops::Sub,
-    time::{Duration, SystemTime},
-};
-
-use bson::{DateTime, Document};
 use derive_more::Display;
 use mongodb::{Client, Collection, Database, bson::doc};
 use serde::{Deserialize, Serialize};
@@ -59,16 +53,6 @@ impl Dataset {
             parties,
             sis,
         }
-    }
-
-    pub fn cached(mut doc: Document, hours: u64) -> Document {
-        doc.extend(doc! {
-            "item._updated": {
-                "$gt": DateTime::from_system_time(SystemTime::now().sub(Duration::from_hours(hours))),
-            },
-        });
-
-        doc
     }
 }
 

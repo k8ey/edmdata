@@ -412,7 +412,7 @@ impl Dataset {
     pub async fn fetch_member_edms(
         &self,
         member_id: i32,
-        cached: &Vec<Member>,
+        stored_members: &Vec<Member>,
     ) -> Result<Vec<PublishedMemberEdm>, PublishedMemberDataError> {
         let mut edms = Vec::<PublishedMemberEdm>::new();
 
@@ -428,26 +428,24 @@ impl Dataset {
                 break;
             }
 
-            if response.iter().all(|edm| {
-                cached
+            if response.iter().all(|response| {
+                stored_members
                     .iter()
-                    .find(|m| m.edms.contains(&(edm.id as u32)))
-                    .is_some()
-                    || edms.iter().find(|e| edm.id == e.id).is_some()
+                    .any(|m| m._id == member_id as u32 && m.edms.contains(&(response.id as u32)))
+                    || edms.iter().any(|e| response.id == e.id)
             }) {
-                break;
+                return Ok(edms);
             }
 
             for edm in response {
-                if DateTime::now()
-                    .saturating_duration_since(edm.date_tabled.and_utc().into())
-                    .as_secs()
-                    > 60 * 60 * 24 * 365
+                if stored_members
+                    .iter()
+                    .any(|m| m._id == member_id as u32 && m.edms.contains(&(edm.id as u32)))
                 {
-                    return Ok(edms);
+                    continue;
                 }
 
-                edms.push(edm.into());
+                edms.push(edm);
             }
 
             page += 1;
@@ -466,11 +464,11 @@ impl Dataset {
     pub async fn fetch_member(
         &self,
         member_id: i32,
-        cached: &Vec<Member>,
+        stored_members: &Vec<Member>,
     ) -> Result<PublishedMember, PublishedMemberDataError> {
         let mut member = RequestMember::new(member_id).get().await?;
         member.biography = Some(self.fetch_member_biography(member_id).await?);
-        member.edms = Some(self.fetch_member_edms(member_id, cached).await?);
+        member.edms = Some(self.fetch_member_edms(member_id, stored_members).await?);
 
         self.check_member(&mut member).await?;
 
@@ -479,7 +477,7 @@ impl Dataset {
 
     pub async fn fetch_members(
         &self,
-        cached: &Vec<Member>,
+        stored_members: &Vec<Member>,
     ) -> Result<Vec<PublishedMember>, PublishedMemberDataError> {
         let mut members = Vec::<PublishedMember>::new();
 
@@ -502,15 +500,23 @@ impl Dataset {
             }
 
             for mut member in response {
-                if cached.iter().find(|m| m._id == member.id as u32).is_some()
-                    || members.iter().find(|m| member.id == m.id).is_some()
+                if stored_members
+                    .iter()
+                    .filter(|member| {
+                        DateTime::now()
+                            .saturating_duration_since(member._updated)
+                            .as_secs()
+                            < 60 * 60 * 12
+                    })
+                    .any(|m| m._id == member.id as u32)
+                    || members.iter().any(|m| member.id == m.id)
                 {
                     tracing::info!("Skipped Cached Member ({}).", member.id);
                     continue;
                 }
 
                 member.biography = Some(self.fetch_member_biography(member.id).await?);
-                member.edms = Some(self.fetch_member_edms(member.id, cached).await?);
+                member.edms = Some(self.fetch_member_edms(member.id, stored_members).await?);
                 self.check_member(&mut member).await?;
 
                 tracing::info!(
@@ -519,7 +525,7 @@ impl Dataset {
                     member.name_display_as.clone().unwrap_or("".to_owned())
                 );
 
-                members.push(member.into());
+                members.push(member);
             }
 
             skip += 1;

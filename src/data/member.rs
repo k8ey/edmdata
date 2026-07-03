@@ -33,7 +33,6 @@ pub struct Member {
     pub gender: String,
 
     pub biography: MemberBiography,
-    /// Most recent edms, not a conclusive list.
     pub edms: Vec<EarlyDayMotionID>,
 
     pub _updated: DateTime,

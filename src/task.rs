@@ -55,16 +55,16 @@ impl Dataset {
     }
 
     pub async fn run_refresh_tasks(&self) -> Result<(), TaskError> {
-        let cached = self
+        let stored_sis = self
             .sis
-            .find(Self::cached(doc! {}, 24 * 7))
+            .find(doc! {})
             .await?
             .try_collect::<Vec<_>>()
             .await?
             .into_iter()
             .map(|si| si.item)
             .collect::<Vec<_>>();
-        let sis = self.fetch_statutory_instruments(&cached).await?;
+        let sis = self.fetch_statutory_instruments(&stored_sis).await?;
 
         let values = sis
             .into_iter()
@@ -107,16 +107,16 @@ impl Dataset {
                 .await?;
         }
 
-        let cached = self
+        let stored_members = self
             .members
-            .find(Self::cached(doc! {}, 24))
+            .find(doc! {})
             .await?
             .try_collect::<Vec<_>>()
             .await?
             .into_iter()
             .map(|member| member.item)
             .collect::<Vec<_>>();
-        let members = self.fetch_members(&cached).await?;
+        let members = self.fetch_members(&stored_members).await?;
 
         let values = members
             .into_iter()
@@ -176,6 +176,21 @@ impl Dataset {
         }
 
         for value in values.iter().map(|(_, _, _, member)| member) {
+            let mut value = value.clone();
+
+            if let Some(stored_member) = stored_members
+                .iter()
+                .find(|stored_member| stored_member._id == value._id)
+            {
+                value.edms = value
+                    .edms
+                    .iter()
+                    .chain(&stored_member.edms)
+                    .unique()
+                    .cloned()
+                    .collect();
+            }
+
             self.members
                 .update_one(
                     doc! {
@@ -183,7 +198,7 @@ impl Dataset {
                     },
                     doc! {
                         "$set": {
-                            "item": bson::serialize_to_document(value)?,
+                            "item": bson::serialize_to_document(&value)?,
                         },
                     },
                 )
@@ -206,24 +221,14 @@ impl Dataset {
                 .await?;
         }
 
-        for edm_id in self
-            .members
-            .find(Self::cached(doc! {}, 24))
-            .await?
-            .try_collect::<Vec<_>>()
-            .await?
-            .into_iter()
-            .flat_map(|member| member.item.edms)
+        for edm_id in values
+            .iter()
+            .flat_map(|(_, _, _, member)| member.edms.iter().cloned())
             .unique()
         {
             let published_edm = self.fetch_early_day_motion(edm_id as i32).await?;
-
-            let si_id = self.normalize_opposing_edm(&published_edm).await?;
-            let edm = published_edm.into();
-
-            let mut edm_extra = EarlyDayMotionExtra::from(&edm);
-            edm_extra.opposes_statutory_instrument = si_id;
-            let edm = EarlyDayMotion::from(edm);
+            let extra = EarlyDayMotionExtra::from(&published_edm);
+            let edm = EarlyDayMotion::from(published_edm);
 
             self.edms
                 .update_one(
@@ -247,7 +252,38 @@ impl Dataset {
                     },
                     doc! {
                         "$set": {
-                            "extra": bson::serialize_to_document(&edm_extra)?,
+                            "extra": bson::serialize_to_document(&extra)?,
+                        },
+                    },
+                )
+                .await?;
+        }
+
+        for edm in self
+            .edms
+            .find(doc! {
+                "extra.opposes_statutory_instrument": null,
+                "extra.source_kind": 1,
+            })
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?
+        {
+            let published_edm = self.fetch_early_day_motion(edm.item._id as i32).await?;
+
+            let si_id = self.normalize_opposing_edm(&published_edm).await?;
+            let mut extra = EarlyDayMotionExtra::from(&published_edm);
+            extra.opposes_statutory_instrument = si_id;
+
+            self.edms
+                .update_one(
+                    bson::doc! {
+                        "item._id": published_edm.motion.id as u32,
+                        "extra": null,
+                    },
+                    bson::doc! {
+                        "$set": {
+                            "extra": bson::serialize_to_document(&extra)?,
                         },
                     },
                 )

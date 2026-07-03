@@ -192,7 +192,7 @@ impl Query for CollectSignatures {
                             ],
                         },
                     },
-                    "tesignaturesmp": {
+                    "signatures": {
                         "$concatArrays": {
                             "$ifNull": [
                                 "$edms.item.withdrawn_signatures",
@@ -229,6 +229,11 @@ impl Query for CollectSignatures {
                     "localField": "signatures.member_id",
                     "foreignField": "item._id",
                     "as": "members",
+                },
+            },
+            doc! {
+                "$set": {
+                    "members.item.edms": [],
                 },
             },
             doc! {
