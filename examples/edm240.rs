@@ -23,7 +23,7 @@ async fn main() {
         early_day_motions_stats(
             &dataset,
             i * 5,
-            format!("early-day-motions-last-{}-years", i * 5),
+            format!("edms-last-{}-years", i * 5),
         )
         .await
         .unwrap();
