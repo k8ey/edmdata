@@ -23,7 +23,7 @@ async fn main() {
         early_day_motions_stats(
             &dataset,
             i * 5,
-            format!("fatal-prayer-motions-last-{}-years", i * 5),
+            format!("early-day-motions-last-{}-years", i * 5),
         )
         .await
         .unwrap();
@@ -152,6 +152,12 @@ pub async fn early_day_motions_stats(
         .try_collect::<Vec<_>>()
         .await?;
 
+    println!(
+        "{} Early Day Motions tabled in the last {} years.",
+        items.len(),
+        years
+    );
+
     StatsQuery::save_json(
         &items,
         Path::new("data/edm240/data/data.json")
@@ -194,6 +200,12 @@ pub async fn fatal_prayer_motions_stats(
         .with_type::<QueryItem>()
         .try_collect::<Vec<_>>()
         .await?;
+
+    println!(
+        "{} Fatal Prayer Motions tabled in the last {} years.",
+        items.len(),
+        years
+    );
 
     StatsQuery::save_json(
         &items,

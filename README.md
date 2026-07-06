@@ -10,6 +10,7 @@ If you would like to create statistics for your own purposes, edmdata can be imp
 ```
 edmdata = { git = "https://github.com/k8ey/edmdata.git" }
 ```
+<br>
 
 Before doing anything else, you need to import the database.<br>
 Archives of the database can be found in the [releases](https://github.com/k8ey/edmdata/releases) section of this repository.<br>
